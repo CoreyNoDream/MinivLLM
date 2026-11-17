@@ -127,11 +127,8 @@ class BlockManager:
     # when that token would require allocating a new block.
     def can_append(self, seq: Sequence) -> bool:
         # Called after the new token is already counted in seq.num_tokens, so the
-        # condition must match append()'s allocation branch: a fresh block is only
-        # needed when that token is the first of a new block (num_tokens % size == 1).
-        # At num_tokens % size == 0 the token still fits in the block the sequence
-        # already holds, and append() merely finalizes its hash.
-        if seq.num_tokens % self.block_size == 1:
+        # A zero-based token index is block-aligned for the first token of a block.
+        if (seq.num_tokens - 1) % self.block_size == 0:
             return len(self.free_block_ids) > 0
         return True
 
@@ -142,18 +139,19 @@ class BlockManager:
         block_tables = seq.block_table
         last_block_for_seq_id = block_tables[-1]
 
+        # For unit-sized blocks, the new block is also immediately full.
+        if (seq.num_tokens - 1) % self.block_size == 0:
+            assert self.blocks[last_block_for_seq_id].hash != -1
+            block = self._allocate_block(self.free_block_ids[0])
+            block_tables.append(block.block_id)
+            last_block_for_seq_id = block.block_id
+
         # if the last block is now full, compute hash
         if seq.num_tokens % self.block_size == 0:
             h = self.compute_hash(token_ids = seq.block(seq.num_blocks - 1), prefix_hash_value = -1 if len(block_tables) == 1 else self.blocks[block_tables[-2]].hash)
             block = self.blocks[last_block_for_seq_id]
             block.update(h=h, token_ids=seq.block(seq.num_blocks - 1))
             self.hash_to_block_id[h] = block.block_id
-        # if one new block is needed
-        elif seq.num_tokens % self.block_size == 1:
-            # Previous block should be finalized
-            assert self.blocks[last_block_for_seq_id].hash != -1
-            block = self._allocate_block(self.free_block_ids[0])
-            block_tables.append(block.block_id)
         # else, do nothing
         else:
             assert last_block_for_seq_id in self.used_block_ids, "Last block should be allocated"
